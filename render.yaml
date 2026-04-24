@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: halal-semi-auto-trading-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
