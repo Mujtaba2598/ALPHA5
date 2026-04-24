@@ -83,7 +83,6 @@
         .control-buttons { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 15px; }
         .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
         .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
-        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
         .stat-card {
             background: #E8F5E9;
             padding: 15px;
@@ -135,7 +134,7 @@
             display: inline-block;
         }
         @media (max-width: 768px) {
-            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
             .header { flex-direction: column; text-align: center; }
         }
     </style>
@@ -157,7 +156,6 @@
         </div>
     </div>
     <div class="main-content">
-        <!-- Login Panel -->
         <div id="authPanel">
             <div class="panel" style="max-width: 450px; margin: 0 auto;">
                 <div class="panel-title"><i class="fas fa-lock"></i> Account Access</div>
@@ -176,9 +174,7 @@
             </div>
         </div>
         
-        <!-- Dashboard -->
         <div id="dashboardPanel" style="display:none;">
-            <!-- Binance Configuration -->
             <div class="panel">
                 <div class="panel-title"><i class="fas fa-cogs"></i> Binance Configuration</div>
                 <div class="grid-2">
@@ -193,7 +189,6 @@
                 <div id="balanceDisplay" class="stat-card" style="margin-top: 15px; text-align: center;">💰 Balance: -- USDT</div>
             </div>
             
-            <!-- Market Analysis (Bot Analyzes) -->
             <div class="panel">
                 <div class="panel-title"><i class="fas fa-chart-line"></i> Market Analysis <span class="islamic-badge"><i class="fas fa-search"></i> Bot Analyzes - You Decide</span></div>
                 <div class="grid-2">
@@ -205,25 +200,21 @@
                 <div id="analysisResult" style="margin-top: 15px;"></div>
             </div>
             
-            <!-- Pending Signals (Needs User Approval) -->
             <div class="panel">
                 <div class="panel-title"><i class="fas fa-bell"></i> Pending Approvals <span class="islamic-badge"><i class="fas fa-user-check"></i> You Must Approve Each Trade</span></div>
                 <div id="pendingSignalsContainer"><div class="stat-card">No pending signals</div></div>
             </div>
             
-            <!-- Current Holdings -->
             <div class="panel">
                 <div class="panel-title"><i class="fas fa-chart-line"></i> Your Holdings</div>
                 <div id="holdingsContainer"><div class="stat-card">Loading...</div></div>
             </div>
             
-            <!-- Trade History -->
             <div class="panel">
                 <div class="panel-title"><i class="fas fa-history"></i> Trade History</div>
                 <div id="tradeHistoryContainer"><div class="stat-card">No trades yet</div></div>
             </div>
             
-            <!-- Admin Panel -->
             <div id="adminPanel" style="display:none;">
                 <div class="panel">
                     <div class="panel-title"><i class="fas fa-users"></i> Admin Controls</div>
@@ -331,26 +322,19 @@
     async function analyzeMarket() {
         const symbol = document.getElementById('analyzeSymbol').value;
         const accountType = document.getElementById('accountType').value;
-        const holdDays = parseInt(document.getElementById('holdDays').value);
-        
-        if (holdDays < 7) {
-            alert('Minimum holding period is 7 days (Islamic ownership requirement)');
-            return;
-        }
         
         try {
-            const res = await fetch('/api/analyze-market', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ symbols: [symbol], accountType, minHoldingDays: holdDays }) });
+            const res = await fetch('/api/analyze-market', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ symbols: [symbol], accountType }) });
             const data = await res.json();
             if (data.success && data.analysis[0]) {
                 const a = data.analysis[0];
-                const signalClass = a.signal === 'OBSERVE' ? 'badge-pending' : 'stat-card';
                 document.getElementById('analysisResult').innerHTML = `
                     <div class="stat-card">
                         <div><strong>${a.symbol}</strong> - Current Price: $${a.currentPrice?.toFixed(2)}</div>
                         <div>24h Change: ${a.priceChange24h?.toFixed(2)}% | Month Trend: ${a.monthTrend}%</div>
                         <div>Volume Ratio (vs avg): ${a.volumeRatio}x</div>
-                        <div>Signal: <span class="${signalClass}">${a.signal}</span></div>
-                        <div class="islamic-badge" style="margin-top: 10px;">${a.halalNote}</div>
+                        <div>24h High: $${a.high24h?.toFixed(2)} | 24h Low: $${a.low24h?.toFixed(2)}</div>
+                        <div class="islamic-badge" style="margin-top: 10px;">Minimum holding period: ${data.minHoldingDays} days</div>
                         <button class="btn btn-success" style="margin-top: 10px;" onclick="createSignal('${a.symbol}')"><i class="fas fa-check-circle"></i> Create Buy Signal (Requires Approval)</button>
                     </div>
                 `;
@@ -425,7 +409,7 @@
     async function rejectSignal(signalId) {
         if (!confirm('Reject this trade signal?')) return;
         try {
-            const res = await fetch('/api/reject-signal', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ signalId }) });
+            const res = await fetch('/api/reject-signal', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ signalId }) });
             const data = await res.json();
             if (data.success) {
                 alert('Signal rejected');
@@ -455,7 +439,7 @@
                                 <div>Invested: $${h.usdtAmount.toFixed(2)} | Value: $${h.currentValue?.toFixed(2) || 'N/A'}</div>
                                 <div>PnL: <span class="${pnlClass}">$${h.unrealizedPnL?.toFixed(2) || 0} (${h.unrealizedPercent || 0}%)</span></div>
                                 <div>Commitment: ${h.commitmentToHoldDays} days | Held: ${h.daysHeld} days</div>
-                                ${h.canSell ? `<button class="btn btn-info" style="margin-top: 10px;" onclick="sellPosition('${h.symbol}', ${h.quantity})">Sell Position (Manual)</button>` : `<span class="badge badge-pending">Cannot sell yet - ${h.remainingDays} days remaining (Islamic ownership requirement)</span>`}
+                                ${h.canSell ? `<button class="btn btn-info" style="margin-top: 10px;" onclick="sellPosition('${h.symbol}', ${h.quantity})">Sell Position (Manual)</button>` : `<span class="badge badge-pending">Cannot sell yet - ${h.remainingDays} days remaining</span>`}
                             </div>
                         `;
                     }
