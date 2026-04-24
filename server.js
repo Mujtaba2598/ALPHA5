@@ -13,8 +13,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'halal-semi-auto-secret-key';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '01234567890123456789012345678901';
 
 // ==================== ISLAMIC COMPLIANCE SETTINGS ====================
-// Minimum holding period (user commits to ownership)
-const MIN_HOLDING_DAYS = 7;  // User agrees to hold for at least 7 days
+const MIN_HOLDING_DAYS = 7;
 
 // ==================== DATA DIRECTORIES ====================
 const dataDir = path.join(__dirname, 'data');
@@ -32,7 +31,6 @@ if (!fs.existsSync(signalsDir)) fs.mkdirSync(signalsDir);
 const usersFile = path.join(dataDir, 'users.json');
 const pendingFile = path.join(pendingDir, 'pending_users.json');
 
-// Default owner account
 if (!fs.existsSync(usersFile)) {
     const defaultUsers = {
         "mujtabahatif@gmail.com": {
@@ -326,20 +324,18 @@ app.get('/api/get-keys', authenticate, (req, res) => {
     res.json({ success: true, apiKey: decrypt(user.apiKey), secretKey: decrypt(user.secretKey) });
 });
 
-// ==================== MARKET ANALYSIS (Bot Analyzes - User Decides) ====================
+// ==================== MARKET ANALYSIS ====================
 app.post('/api/analyze-market', authenticate, async (req, res) => {
-    const { symbols, accountType, minHoldingDays } = req.body;
+    const { symbols, accountType } = req.body;
     const useDemo = (accountType === 'testnet');
     
     const analysisResults = [];
     
     for (const symbol of symbols) {
         try {
-            // Get real market data
             const stats = await get24hrStats(symbol, useDemo);
             const currentPrice = await getCurrentPrice(symbol, useDemo);
             
-            // Get month trend (for fundamental context)
             const baseUrl = useDemo ? 'https://demo-api.binance.com' : 'https://api.binance.com';
             const monthlyKlines = await axios.get(`${baseUrl}/api/v3/klines`, {
                 params: { symbol, interval: '1d', limit: 30 }
@@ -347,7 +343,6 @@ app.post('/api/analyze-market', authenticate, async (req, res) => {
             const monthStartPrice = parseFloat(monthlyKlines.data[0][4]);
             const monthTrend = ((currentPrice - monthStartPrice) / monthStartPrice) * 100;
             
-            // Calculate average volume
             const avgVolume = monthlyKlines.data.slice(-7).reduce((sum, k) => sum + parseFloat(k[5]), 0) / 7;
             const volumeRatio = stats.volume / avgVolume;
             
@@ -360,9 +355,6 @@ app.post('/api/analyze-market', authenticate, async (req, res) => {
                 monthTrend: monthTrend.toFixed(2),
                 high24h: stats.high,
                 low24h: stats.low,
-                signal: volumeRatio > 1.5 && monthTrend > -10 ? 'OBSERVE' : 'NEUTRAL',
-                // Islamic note
-                halalNote: `Minimum recommended holding period: ${minHoldingDays || MIN_HOLDING_DAYS} days for genuine ownership`,
                 timestamp: new Date().toISOString()
             });
         } catch (error) {
@@ -373,7 +365,7 @@ app.post('/api/analyze-market', authenticate, async (req, res) => {
     res.json({ success: true, analysis: analysisResults, minHoldingDays: MIN_HOLDING_DAYS });
 });
 
-// ==================== PENDING SIGNALS (User Must Approve) ====================
+// ==================== SIGNALS (USER MUST APPROVE) ====================
 app.post('/api/create-signal', authenticate, async (req, res) => {
     const { symbol, usdtAmount, accountType, commitmentToHoldDays } = req.body;
     
@@ -386,7 +378,7 @@ app.post('/api/create-signal', authenticate, async (req, res) => {
     }
     
     if (commitmentToHoldDays < MIN_HOLDING_DAYS) {
-        return res.status(400).json({ success: false, message: `You must commit to hold for at least ${MIN_HOLDING_DAYS} days (Islamic ownership requirement)` });
+        return res.status(400).json({ success: false, message: `You must commit to hold for at least ${MIN_HOLDING_DAYS} days` });
     }
     
     const users = readUsers();
@@ -395,12 +387,10 @@ app.post('/api/create-signal', authenticate, async (req, res) => {
         return res.status(400).json({ success: false, message: 'Please add API keys first' });
     }
     
-    // Get current price for reference
     const useDemo = (accountType === 'testnet');
     const currentPrice = await getCurrentPrice(symbol, useDemo);
     const stats = await get24hrStats(symbol, useDemo);
     
-    // Create pending signal (NOT executed yet)
     const signal = {
         symbol: symbol,
         usdtAmount: usdtAmount,
@@ -410,7 +400,7 @@ app.post('/api/create-signal', authenticate, async (req, res) => {
         commitmentToHoldDays: commitmentToHoldDays,
         accountType: accountType,
         createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // Expires in 1 hour
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         status: 'pending'
     };
     
@@ -423,14 +413,12 @@ app.post('/api/create-signal', authenticate, async (req, res) => {
     });
 });
 
-// Get pending signals (user needs to approve)
 app.get('/api/pending-signals', authenticate, (req, res) => {
     const signals = loadSignals(req.user.email);
     const pendingSignals = signals.filter(s => s.status === 'pending' && new Date(s.expiresAt) > new Date());
     res.json({ success: true, signals: pendingSignals });
 });
 
-// Approve a signal (USER MUST CLICK APPROVE)
 app.post('/api/approve-signal', authenticate, async (req, res) => {
     const { signalId } = req.body;
     
@@ -457,19 +445,16 @@ app.post('/api/approve-signal', authenticate, async (req, res) => {
     const useDemo = (signal.accountType === 'testnet');
     
     try {
-        // Check balance
         const balance = await getSpotBalance(apiKey, secretKey, useDemo);
         if (balance < signal.usdtAmount) {
             updateSignalStatus(req.user.email, signalId, 'failed');
             return res.status(400).json({ success: false, message: `Insufficient balance: ${balance} USDT < ${signal.usdtAmount}` });
         }
         
-        // Execute the buy order (USER APPROVED)
         const order = await executeBuyOrder(apiKey, secretKey, signal.symbol, signal.usdtAmount, useDemo);
         const fillPrice = parseFloat(order.fills?.[0]?.price || signal.currentPrice);
         const quantity = parseFloat(order.executedQty);
         
-        // Save to holdings
         const holdings = loadHoldings(req.user.email);
         holdings.push({
             symbol: signal.symbol,
@@ -483,7 +468,6 @@ app.post('/api/approve-signal', authenticate, async (req, res) => {
         });
         saveHoldings(req.user.email, holdings);
         
-        // Save to trade history
         const userTradeFile = path.join(tradesDir, req.user.email.replace(/[^a-z0-9]/gi, '_') + '.json');
         let allTrades = [];
         if (fs.existsSync(userTradeFile)) allTrades = JSON.parse(fs.readFileSync(userTradeFile));
@@ -498,7 +482,6 @@ app.post('/api/approve-signal', authenticate, async (req, res) => {
         });
         fs.writeFileSync(userTradeFile, JSON.stringify(allTrades, null, 2));
         
-        // Update signal status
         updateSignalStatus(req.user.email, signalId, 'executed', { fillPrice, quantity });
         
         res.json({ 
@@ -513,14 +496,13 @@ app.post('/api/approve-signal', authenticate, async (req, res) => {
     }
 });
 
-// Reject a signal
 app.post('/api/reject-signal', authenticate, async (req, res) => {
     const { signalId } = req.body;
     updateSignalStatus(req.user.email, signalId, 'rejected');
     res.json({ success: true, message: 'Signal rejected' });
 });
 
-// ==================== SELL ORDERS (Manual - User decides when to sell) ====================
+// ==================== SELL ORDERS ====================
 app.post('/api/manual-sell', authenticate, async (req, res) => {
     const { symbol, quantity, accountType } = req.body;
     
@@ -535,12 +517,11 @@ app.post('/api/manual-sell', authenticate, async (req, res) => {
         return res.status(400).json({ success: false, message: `Insufficient quantity. You have ${holding.quantity}` });
     }
     
-    // Check if minimum holding period has been met
     const daysHeld = (Date.now() - holding.entryTimestamp) / (1000 * 60 * 60 * 24);
     if (daysHeld < holding.commitmentToHoldDays) {
         return res.status(400).json({ 
             success: false, 
-            message: `Cannot sell yet. You committed to hold for ${holding.commitmentToHoldDays} days. Only ${daysHeld.toFixed(1)} days passed. Islamic ownership requirement.` 
+            message: `Cannot sell yet. You committed to hold for ${holding.commitmentToHoldDays} days. Only ${daysHeld.toFixed(1)} days passed.` 
         });
     }
     
@@ -556,7 +537,6 @@ app.post('/api/manual-sell', authenticate, async (req, res) => {
         const exitPrice = parseFloat(order.fills?.[0]?.price || currentPrice);
         const profit = (exitPrice - holding.entryPrice) * quantity;
         
-        // Update holdings
         if (quantity === holding.quantity) {
             const updatedHoldings = holdings.filter(h => h.symbol !== symbol);
             saveHoldings(req.user.email, updatedHoldings);
@@ -565,7 +545,6 @@ app.post('/api/manual-sell', authenticate, async (req, res) => {
             saveHoldings(req.user.email, holdings);
         }
         
-        // Save to trade history
         const userTradeFile = path.join(tradesDir, req.user.email.replace(/[^a-z0-9]/gi, '_') + '.json');
         let allTrades = [];
         if (fs.existsSync(userTradeFile)) allTrades = JSON.parse(fs.readFileSync(userTradeFile));
@@ -624,7 +603,6 @@ app.post('/api/holdings', authenticate, async (req, res) => {
     res.json({ success: true, holdings: holdingsWithData, minHoldingDays: MIN_HOLDING_DAYS });
 });
 
-// ==================== TRADE HISTORY ====================
 app.get('/api/trade-history', authenticate, (req, res) => {
     const userTradeFile = path.join(tradesDir, req.user.email.replace(/[^a-z0-9]/gi, '_') + '.json');
     if (!fs.existsSync(userTradeFile)) {
@@ -634,7 +612,6 @@ app.get('/api/trade-history', authenticate, (req, res) => {
     res.json({ success: true, trades: trades });
 });
 
-// ==================== BALANCE ====================
 app.post('/api/get-balance', authenticate, async (req, res) => {
     const { accountType } = req.body;
     const users = readUsers();
@@ -651,7 +628,6 @@ app.post('/api/get-balance', authenticate, async (req, res) => {
     }
 });
 
-// ==================== AVAILABLE COINS ====================
 app.get('/api/available-coins', authenticate, (req, res) => {
     const coins = [
         { symbol: 'BTCUSDT', name: 'Bitcoin' },
@@ -711,12 +687,12 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`║  ISLAMIC COMPLIANCE:                                              ║`);
     console.log(`║  ✅ Bot ANALYZES - User DECIDES (No auto-execution)               ║`);
     console.log(`║  ✅ User must APPROVE every trade manually                        ║`);
-    console.log(`║  ✅ Minimum ${MIN_HOLDING_DAYS} day holding period (Ownership)            ║`);
+    console.log(`║  ✅ Minimum ${MIN_HOLDING_DAYS} day holding period                 ║`);
     console.log(`║  ✅ NO take-profit targets (No gambling)                          ║`);
     console.log(`║  ✅ NO stop-loss (No gambling)                                    ║`);
     console.log(`║  ✅ Spot trading only, Long only, Your capital                    ║`);
     console.log(`║  ✅ No interest (Riba)                                            ║`);
-    console.log(`║  ✅ No speculation (Gharar) - User researches fundamentals        ║`);
+    console.log(`║  ✅ No speculation (Gharar)                                       ║`);
     console.log(`╠════════════════════════════════════════════════════════════════════╣`);
     console.log(`║  Server running on port: ${PORT}                                      ║`);
     console.log(`╚════════════════════════════════════════════════════════════════════╝`);
